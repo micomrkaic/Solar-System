@@ -16,6 +16,9 @@
  * Compile  : gcc -O2 -std=c17 solar_system.c -o solar_system \
  *                $(pkg-config --cflags --libs sdl2 SDL2_ttf)
  *
+ * Recording: Press V to start/stop. Requires ffmpeg in PATH.
+ *            Output: solar_YYYYMMDD_HHMMSS.mp4
+ *
  * SDL3 port: Replace SDL_RenderDrawPointF → SDL_RenderPoint,
  *            SDL_RenderDrawLineF → SDL_RenderLine, and update
  *            the init/destroy boilerplate.  Everything else is identical.
@@ -27,6 +30,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 /* ── constants ─────────────────────────────────────────────────────────── */
 #define G_AU        (4.0 * M_PI * M_PI)   /* AU³/(M☉·yr²)               */
@@ -229,37 +233,36 @@ static void leapfrog_step(Sim *sim){
 }
 
 /* ── simulation init ─────────────────────────────────────────────────────── */
-static Sim sim_init(void){
-    Sim sim; memset(&sim,0,sizeof(sim));
-    sim.dt    = 1.0/(365.25*6.0); /* 1/6 day in years — finer minimum speed  */
-    sim.speed = 1.0;
+static void sim_init(Sim *sim){
+    memset(sim,0,sizeof(*sim));
+    sim->dt    = 1.0/(365.25*6.0); /* 1/6 day in years — finer minimum speed  */
+    sim->speed = 1.0;
 
     /* First pass: set all masses, positions, velocities from Keplerian elements */
     for(int i=0;i<N_BODIES;i++){
-        sim.mass[i] = BODIES[i].mass;
-        elements_to_cartesian(&BODIES[i], &sim.pos[i], &sim.vel[i]);
+        sim->mass[i] = BODIES[i].mass;
+        elements_to_cartesian(&BODIES[i], &sim->pos[i], &sim->vel[i]);
     }
     /* Second pass: single correct leapfrog half-kick using full N-body accel */
     {
         Vec3 acc[N_BODIES];
-        compute_accel(sim.pos, sim.mass, acc);
+        compute_accel(sim->pos, sim->mass, acc);
         for(int i=0;i<N_BODIES;i++)
-            sim.vel[i] = v3sub(sim.vel[i], v3scale(acc[i], 0.5*sim.dt));
+            sim->vel[i] = v3sub(sim->vel[i], v3scale(acc[i], 0.5*sim->dt));
     }
     /* compute per-body trail capacities: one full orbit each */
     for(int i=0;i<N_BODIES;i++){
         if(BODIES[i].period_yr <= 0.0){
-            sim.trail_cap[i] = 0;   /* Sun: no trail */
+            sim->trail_cap[i] = 0;   /* Sun: no trail */
         } else {
             /* 1 sample every 3 physics steps, each step = 1 day */
             double samples_per_yr = 365.25 / 3.0;
             int cap = (int)(BODIES[i].period_yr * samples_per_yr);
             if(cap < 50)       cap = 50;
             if(cap > TRAIL_LEN) cap = TRAIL_LEN;
-            sim.trail_cap[i] = cap;
+            sim->trail_cap[i] = cap;
         }
     }
-    return sim;
 }
 
 /* ── trail management ───────────────────────────────────────────────────── */
@@ -544,7 +547,8 @@ static void draw_panel(SDL_Renderer *rend, TTF_Font *font_lg, TTF_Font *font_sm,
     draw_text(rend, font_sm, "1-9  – select body",    px0, yh+70, 120,120,140);
     draw_text(rend, font_sm, "R    – reset view",     px0, yh+84, 120,120,140);
     draw_text(rend, font_sm, "X/Y/Z – axis views",    px0, yh+98, 120,120,140);
-    draw_text(rend, font_sm, "Q / Esc  – quit",       px0, yh+112, 120,120,140);
+    draw_text(rend, font_sm, "V    – record video",   px0, yh+112, 120,120,140);
+    draw_text(rend, font_sm, "Q / Esc  – quit",       px0, yh+126, 120,120,140);
 }
 
 /* ── draw legend at top-left of sim area ───────────────────────────────── */
@@ -612,7 +616,8 @@ int main(void){
         if(!font_lg || !font_sm) return 1;
     }
 
-    Sim    sim = sim_init();
+    static Sim sim;
+    sim_init(&sim);
     Camera cam = cam_init();
 
     /* trail sampling counter */
@@ -626,6 +631,13 @@ int main(void){
 
     /* number of physics steps per rendered frame */
     int steps_per_frame = 5;
+
+    /* ── video recording state ───────────────────────────────────── */
+    FILE  *ffmpeg_pipe  = NULL;   /* popen'd ffmpeg process           */
+    Uint8 *pixel_buf    = NULL;   /* frame pixel buffer               */
+    int    recording    = 0;      /* currently recording?             */
+    int    rec_frames   = 0;      /* frames written this recording    */
+
 
     while(running){
         /* ── events ──────────────────────────────────────────────────── */
@@ -644,6 +656,37 @@ int main(void){
                     if(steps_per_frame<1) steps_per_frame=1;
                     break;
                 case SDLK_r: cam = cam_init(); break;
+                case SDLK_v: {
+                    if(!recording){
+                        /* build filename with timestamp */
+                        time_t t = time(NULL);
+                        struct tm *tm = localtime(&t);
+                        char fname[64];
+                        strftime(fname, sizeof(fname),
+                                 "solar_%Y%m%d_%H%M%S.mp4", tm);
+                        char cmd[256];
+                        snprintf(cmd, sizeof(cmd),
+                            "ffmpeg -y -f rawvideo -pixel_format bgra "
+                            "-video_size %dx%d -framerate 60 -i pipe:0 "
+                            "-c:v libx264 -preset fast -crf 18 "
+                            "-pix_fmt yuv420p %s",
+                            WIN_W, WIN_H, fname);
+                        ffmpeg_pipe = popen(cmd, "w");
+                        if(ffmpeg_pipe){
+                            pixel_buf = malloc(WIN_W * WIN_H * 4);
+                            recording = 1; rec_frames = 0;
+                            SDL_Log("Recording started: %s", fname);
+                        } else {
+                            SDL_Log("Failed to open ffmpeg pipe");
+                        }
+                    } else {
+                        /* stop recording */
+                        recording = 0;
+                        free(pixel_buf); pixel_buf = NULL;
+                        pclose(ffmpeg_pipe); ffmpeg_pipe = NULL;
+                        SDL_Log("Recording stopped (%d frames)", rec_frames);
+                    }
+                } break;
                 case SDLK_x: cam_set_view(&cam, 0); break; /* YZ plane */
                 case SDLK_y: cam_set_view(&cam, 1); break; /* XZ plane */
                 case SDLK_z: cam_set_view(&cam, 2); break; /* XY plane – top-down */
@@ -826,11 +869,40 @@ int main(void){
             draw_text(rend,font_sm,fbuf, SIM_W-200, WIN_H-20, 80,80,100);
         }
 
+        /* REC indicator */
+        if(recording){
+            /* blinking red dot */
+            Uint32 ms = SDL_GetTicks();
+            if((ms/500)%2 == 0){  /* blink every 500ms */
+                set_color(rend, 220, 30, 30, 255);
+                fill_circle(rend, SIM_W - 18, 14, 7);
+            }
+            set_color(rend, 220, 30, 30, 255);
+            draw_text(rend, font_sm, "REC", SIM_W - 44, 6, 220, 30, 30);
+            char rfbuf[32];
+            snprintf(rfbuf, sizeof(rfbuf), "%ds",
+                     rec_frames / 60);
+            draw_text(rend, font_sm, rfbuf, SIM_W - 44, 20, 180, 30, 30);
+        }
+
         /* info panel */
         draw_panel(rend, font_lg, font_sm, &sim, &cam, cam.selected);
 
         SDL_RenderPresent(rend);
+
+        /* ── capture frame to ffmpeg if recording ──────────────── */
+        if(recording && ffmpeg_pipe && pixel_buf){
+            SDL_RenderReadPixels(rend, NULL, SDL_PIXELFORMAT_BGRA32,
+                                 pixel_buf, WIN_W * 4);
+            fwrite(pixel_buf, 4, WIN_W * WIN_H, ffmpeg_pipe);
+            rec_frames++;
+        }
     }
+
+    if(recording && ffmpeg_pipe){
+        pclose(ffmpeg_pipe); ffmpeg_pipe = NULL;
+    }
+    free(pixel_buf);
 
     TTF_CloseFont(font_lg);
     TTF_CloseFont(font_sm);
