@@ -1,0 +1,126 @@
+# Makefile.emscripten  —  Build solar_system_wasm for itch.io (WebAssembly)
+#
+# Prerequisites
+# ─────────────
+#   1. Emscripten SDK activated:
+#        source /path/to/emsdk/emsdk_env.sh
+#
+#   2. DejaVuSans.ttf in this directory.
+#      Quick download (Debian/Ubuntu):
+#        sudo apt install fonts-dejavu-core
+#        cp /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf .
+#      Or manually from https://dejavu-fonts.github.io/
+#
+# Targets
+# ───────
+#   make -f Makefile.emscripten          – release build
+#   make -f Makefile.emscripten debug    – debug build (unoptimised, assertions)
+#   make -f Makefile.emscripten clean    – remove build artefacts
+#   make -f Makefile.emscripten zip      – package dist/ into solar_system.zip
+#                                          (ready to upload to itch.io)
+
+EMCC   := emcc
+SRC    := solar_system_wasm.c
+FONT   := DejaVuSans.ttf
+OUTDIR := dist
+OUT    := $(OUTDIR)/solar_system.js
+
+# ── flags ─────────────────────────────────────────────────────────────────
+# SDL2 and SDL2_ttf are bundled in Emscripten's ports system:
+# -s USE_SDL=2        pulls in libSDL2
+# -s USE_SDL_TTF=2    pulls in libSDL2_ttf + FreeType
+CFLAGS := -O2 -std=c17 \
+          -s USE_SDL=2 \
+          -s USE_SDL_TTF=2
+
+LDFLAGS := -s USE_SDL=2 \
+           -s USE_SDL_TTF=2 \
+           -s ALLOW_MEMORY_GROWTH=1 \
+           -s INITIAL_MEMORY=67108864 \
+           -s MAXIMUM_MEMORY=268435456 \
+           --preload-file $(FONT) \
+           -s EXPORTED_RUNTIME_METHODS='["ccall","cwrap"]' \
+           -s ENVIRONMENT=web \
+           -s MODULARIZE=0
+
+# Separate debug flags
+DEBUG_CFLAGS  := -O0 -g -std=c17 \
+                 -s USE_SDL=2 \
+                 -s USE_SDL_TTF=2 \
+                 -s ASSERTIONS=2 \
+                 -s SAFE_HEAP=1 \
+                 -s STACK_OVERFLOW_CHECK=2
+
+DEBUG_LDFLAGS := -s USE_SDL=2 \
+                 -s USE_SDL_TTF=2 \
+                 -s ALLOW_MEMORY_GROWTH=1 \
+                 -s INITIAL_MEMORY=67108864 \
+                 -s ASSERTIONS=2 \
+                 -s SAFE_HEAP=1 \
+                 --preload-file $(FONT) \
+                 -s EXPORTED_RUNTIME_METHODS='["ccall","cwrap"]' \
+                 -s ENVIRONMENT=web
+
+# ── rules ─────────────────────────────────────────────────────────────────
+.PHONY: all debug clean zip check-font check-emcc
+
+all: check-emcc check-font $(OUTDIR) $(OUT) copy-html
+	@echo ""
+	@echo "Build complete → $(OUTDIR)/"
+	@echo "Files to upload to itch.io: solar_system.js  solar_system.wasm  solar_system.data  index.html"
+
+$(OUTDIR):
+	mkdir -p $(OUTDIR)
+
+$(OUT): $(SRC) $(FONT)
+	$(EMCC) $(CFLAGS) $(SRC) $(LDFLAGS) -o $(OUT)
+
+copy-html:
+	cp index.html $(OUTDIR)/index.html
+
+debug: check-emcc check-font $(OUTDIR)
+	$(EMCC) $(DEBUG_CFLAGS) $(SRC) $(DEBUG_LDFLAGS) -o $(OUTDIR)/solar_system.js
+	cp index.html $(OUTDIR)/index.html
+	@echo "Debug build complete → $(OUTDIR)/"
+
+zip: all
+	cd $(OUTDIR) && zip -r ../solar_system_itchio.zip .
+	@echo "Packaged → solar_system_itchio.zip  (upload this to itch.io)"
+
+clean:
+	rm -rf $(OUTDIR) solar_system_itchio.zip
+
+# ── guards ────────────────────────────────────────────────────────────────
+check-emcc:
+	@command -v $(EMCC) >/dev/null 2>&1 || { \
+	  echo "ERROR: emcc not found.  Activate the Emscripten SDK first:"; \
+	  echo "  source /path/to/emsdk/emsdk_env.sh"; \
+	  exit 1; }
+
+check-font:
+	@if [ ! -f $(FONT) ]; then \
+	  echo "$(FONT) not found locally — searching system font paths…"; \
+	  FOUND=""; \
+	  for p in \
+	    /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf \
+	    /usr/share/fonts/dejavu/DejaVuSans.ttf \
+	    /usr/share/fonts/TTF/DejaVuSans.ttf \
+	    /usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf \
+	    /usr/local/share/fonts/dejavu/DejaVuSans.ttf \
+	    "$$(brew --prefix 2>/dev/null)/share/fonts/dejavu/DejaVuSans.ttf" \
+	    /opt/homebrew/share/fonts/dejavu/DejaVuSans.ttf \
+	    /Library/Fonts/DejaVuSans.ttf \
+	  ; do \
+	    if [ -f "$$p" ]; then FOUND="$$p"; break; fi; \
+	  done; \
+	  if [ -n "$$FOUND" ]; then \
+	    echo "Found at $$FOUND — copying…"; \
+	    cp "$$FOUND" $(FONT); \
+	  else \
+	    echo "ERROR: Could not find DejaVuSans.ttf on this system."; \
+	    echo "  Debian/Ubuntu : sudo apt install fonts-dejavu-core"; \
+	    echo "  macOS         : brew install --cask font-dejavu"; \
+	    echo "  Manual        : https://dejavu-fonts.github.io/"; \
+	    exit 1; \
+	  fi; \
+	fi
