@@ -1,6 +1,7 @@
 # 3-D Solar System Simulation
 
 A real-time interactive simulation of the solar system written in C17 using SDL2.
+Design decisions and the measurements behind them are in [ARCHITECTURE.md](ARCHITECTURE.md).
 All eight planets and the Sun are integrated as a full N-body gravitational
 system with a 4th-order Yoshida symplectic integrator, with initial conditions
 from JPL Horizons (J2000.0 epoch). One source file builds a native binary and a
@@ -91,9 +92,12 @@ make info       # show detected build settings
 The Makefile auto-detects macOS (Homebrew) vs Linux. Manual compile:
 
 ```bash
-gcc -O2 -std=c17 solar_system.c -o solar_system \
+gcc -O2 -std=c17 -DHAVE_HORIZONS_J2000 solar_system.c -o solar_system \
     $(pkg-config --cflags --libs sdl2 SDL2_ttf) -lm
 ```
+
+(drop `-DHAVE_HORIZONS_J2000` if `horizons_j2000.h` is absent; `make` decides
+this automatically.)
 
 ### Installing
 
@@ -146,11 +150,9 @@ make run
 ```
 
 The simulation starts at J2000.0 (1 January 2000, 12:00 TT) with all planets
-at their true positions and velocities. The native window is resizable; the
-scene scales to fit.
-
-The window is resizable and HiDPI-aware; the scene is re-rendered at the new
-physical resolution (letterboxed if the aspect ratio differs).
+at their true positions and velocities. The window is resizable and
+HiDPI-aware; the scene is re-rendered at the new physical resolution
+(letterboxed if the aspect ratio differs).
 
 Environment variables: `SOLAR_FONT=/path/to/font.ttf` overrides the font;
 `SOLAR_SCALE=1.5` opens a larger window; `SOLAR_SNAPSHOT=frame.bmp`
@@ -273,31 +275,27 @@ Earth–Moon barycentre), matching the barycentric Horizons vectors.
 
 ### Initial conditions
 
-Orbital elements are from the JPL SSD "Keplerian Elements for Approximate
-Positions of the Major Planets" (Table 1, J2000.0 epoch):
+**Default: JPL Horizons state vectors.** `tests/fetch_j2000_state.sh` queries
+the Horizons API for the Sun and the eight planetary-system barycentres at
+JD 2451545.0 TDB (J2000.0) — solar-system barycentre, ecliptic and mean
+equinox of J2000, AU and AU/day — and writes `horizons_j2000.h`. When that
+header exists `make` defines `HAVE_HORIZONS_J2000` and `sim_init()` starts
+from these exact osculating states. The header is committed, so a fresh clone
+builds the validated configuration.
 
-- Semi-major axis a, eccentricity e, inclination i — taken directly
-- Argument of perihelion ω = ϖ − Ω (longitude of perihelion minus longitude
-  of ascending node) — this distinction matters; mixing ϖ and ω corrupts
-  the orbit orientation by Ω
-- Mean anomaly M₀ = L − ϖ (mean longitude minus longitude of perihelion)
+**Fallback: JPL approximate elements.** Without the header the SSD table
+"Keplerian Elements for Approximate Positions of the Major Planets" (J2000.0)
+is converted to Cartesian state:
 
-Initial velocities in the orbital plane are computed as:
+- a, e, i taken directly; ω = ϖ − Ω; M₀ = L − ϖ
+- Kepler's equation solved by Newton iteration
+- in-plane velocity `vfac = n·a²/r`, `vx = −vfac·sin E`, `vy = vfac·√(1−e²)·cos E`,
+  with n = √(μ/a³) so that vis-viva holds to 5×10⁻¹⁶ at t = 0
 
-```
-vfac = n · a² / r        (n = √(μ/a³), μ = G(M☉+m), r = current radius)
-vx   = −vfac · sin(E)
-vy   =  vfac · √(1−e²) · cos(E)
-```
-
-The factor `n·a²/r` is the correct Keplerian expression. A common error is to
-use `n·a/√(1−e²)` instead, which equals `n·a²/r` only at the semi-latus rectum
-(r = a(1−e²)) and is wrong everywhere else, giving up to ~23% velocity error for
-Mercury at aphelion.
-
-Using n = √(μ/a³) rather than the catalogue period makes the initial state
-consistent with the dynamics actually integrated: the vis-viva test passes to
-5×10⁻¹⁶.
+These are *mean* elements, not osculating ones: used as instantaneous initial
+conditions they put Saturn ~3.5 % off after 20 years (the Jupiter–Saturn 5:2
+great inequality moves Saturn's osculating a by hundredths of an AU). That is
+why the Horizons position test is only informational in this mode.
 
 ### Test particles
 
@@ -316,7 +314,7 @@ make test        # = ./solar_system --test, no window needed
 
 | Test | Asserts |
 |------|---------|
-| vis-viva at t = 0 | \|v² − μ(2/r − 1/a)\|/v² < 10⁻⁹ for every planet |
+| initial state | Horizons mode: osculating a within 1 % of the catalogue a (frame/units sanity); elements mode: \|v² − μ(2/r − 1/a)\|/v² < 10⁻⁹ |
 | Earth two-body period | matches 2π√(a³/μ) to 10⁻⁶ |
 | 100-yr N-body conservation | \|ΔE/E₀\| < 10⁻⁸, \|ΔL/L₀\| < 10⁻¹⁰ |
 | Mercury numerical drift | \|ϖ̇\| < 5″/century in the two-body problem |
@@ -346,15 +344,18 @@ for deploying from a branch).
 ## File structure
 
 ```
-solar_system.c           — the whole simulation; native and WebAssembly from one file
-Makefile                 — build, test, install/uninstall, wasm, pages, zip
-shell.html               — HTML shell the WebAssembly build is wrapped in
-man/solar_system.6       — man page (installed by make install)
-tests/fetch_horizons.sh  — fetches JPL Horizons reference positions for make test
-tests/fetch_j2000_state.sh — generates horizons_j2000.h (exact J2000 initial state)
-.github/workflows/ci.yml — tests + Pages deployment
-DejaVuSans.ttf           — bundled font (embedded in the web build, installed natively)
-docs/index.html          — web build for GitHub Pages when deploying from a branch
+solar_system.c             — the whole simulation; native and WebAssembly from one file
+horizons_j2000.h           — JPL Horizons J2000 state vectors (generated, committed)
+Makefile                   — build, test, install/uninstall, wasm, pages, zip
+shell.html                 — HTML shell the WebAssembly build is wrapped in
+man/solar_system.6         — man page (installed by make install)
+tests/fetch_j2000_state.sh — generates horizons_j2000.h
+tests/fetch_horizons.sh    — fetches reference positions → tests/horizons.csv
+tests/horizons.csv         — reference positions for make test (generated, committed)
+.github/workflows/ci.yml   — tests + Pages deployment
+ARCHITECTURE.md            — design decisions and the reasoning behind them
+DejaVuSans.ttf             — bundled font (embedded in the web build, installed natively)
+docs/index.html            — web build for GitHub Pages when deploying from a branch
 ```
 
 Platform differences are confined to `#ifdef __EMSCRIPTEN__` blocks in the
@@ -370,3 +371,5 @@ the main-loop driver, the resize source, and the ffmpeg recorder.
 - JPL Solar System Dynamics, https://ssd.jpl.nasa.gov/planets/approx_pos.html — orbital elements
 - Yoshida, "Construction of higher order symplectic integrators", Phys. Lett. A 150 (1990) 262
 - Will, *Theory and Experiment in Gravitational Physics* — the 1PN equations of motion
+- Park, Folkner, Williams & Boggs, "The JPL Planetary and Lunar Ephemerides DE440 and DE441", AJ 161 (2021) 105 — masses and the reference ephemeris
+- JPL Horizons API, https://ssd-api.jpl.nasa.gov/doc/horizons.html — initial conditions and validation vectors
