@@ -259,11 +259,17 @@ simulated time to settle to ±1″/century. Planet–planet 1PN terms are omitte
 | Length | AU (astronomical units) |
 | Mass | M☉ (solar masses) |
 | Time | years |
-| G | 4π² AU³ M☉⁻¹ yr⁻² |
+| GM☉ | k²·365.25² = 39.47693 AU³ yr⁻² (k = Gaussian constant) |
 | c | 63241.077 AU/yr |
 
-With G = 4π², a circular orbit at 1 AU has period exactly 1 year by
-Kepler's third law, which is a useful sanity check.
+Not 4π²: that value is exact only in *Gaussian* years (365.2569 d). With
+Julian years and Horizons' per-day velocities, G = 4π² makes GM☉ 3.8×10⁻⁵
+too large and — because the initial velocities are fixed — every mean motion
+2×3.8×10⁻⁵ too fast, i.e. ~0.01 AU of along-track error for the inner planets
+after 20 years. `make test` caught this.
+
+Planet masses are the DE441 GM ratios of the planetary *systems* (Earth is the
+Earth–Moon barycentre), matching the barycentric Horizons vectors.
 
 ### Initial conditions
 
@@ -315,14 +321,17 @@ make test        # = ./solar_system --test, no window needed
 | 100-yr N-body conservation | \|ΔE/E₀\| < 10⁻⁸, \|ΔL/L₀\| < 10⁻¹⁰ |
 | Mercury numerical drift | \|ϖ̇\| < 5″/century in the two-body problem |
 | Mercury 1PN advance | ϖ̇(GR) − ϖ̇(Newton) = 42.98 ± 1″/century |
-| Positions vs JPL Horizons | \|Δr\| < 0.1 % of a at the reference epoch (strict with `horizons_j2000.h`; informational from mean elements) |
+| Positions vs JPL Horizons | \|Δr\| < 10⁻⁴·a per 20 yr at the reference epoch, GR on (strict with `horizons_j2000.h`; informational from mean elements) |
 
 The Horizons check runs when `tests/horizons.csv` exists;
 `tests/fetch_horizons.sh [JD]` downloads heliocentric ecliptic-J2000 positions
 of the eight planetary-system barycentres from the Horizons API (default
 epoch 2020-01-01). Run `tests/fetch_j2000_state.sh` once and commit the
 resulting `horizons_j2000.h` to start from exact osculating states; the
-check is then strict.
+check is then strict. Achieved agreement with DE441 after 20 years: ~800 km
+(Mercury) to ~1800 km (Venus) for the inner planets, 15–110 km for the outer
+ones — the remainder is physics the model omits (asteroids, the Moon as a
+separate body, solar oblateness).
 
 ## Continuous integration
 

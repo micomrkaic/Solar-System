@@ -15,8 +15,8 @@
  *            display's native resolution (crisp at any size / DPR).
  *            Arcball rotation, pan, zoom, follow-the-body focus mode.
  *
- * Units    : AU (astronomical units), solar masses, years.
- *            G = 4π²  in these units;  c = 63241.077 AU/yr.
+ * Units    : AU (astronomical units), solar masses, Julian years.
+ *            GM☉ = k²·365.25² = 39.47693 AU³/yr² (≈4π²);  c = 63241.077 AU/yr.
  *
  * Builds   : one source for both targets — see Makefile.
  *              make            native binary (resizable, HiDPI, video capture)
@@ -54,7 +54,13 @@
 #endif
 
 /* ── constants ─────────────────────────────────────────────────────────── */
-#define G_AU        (4.0 * M_PI * M_PI)     /* AU³/(M☉·yr²)                 */
+/* GM☉ in AU³/yr² with the Julian year (365.25 d) as the time unit:
+   k²·365.25², k = 0.01720209895 AU^1.5/day (Gaussian constant; equals
+   DE441's GM☉ = 1.32712440041e20 m³/s² with the IAU 2012 AU).  The
+   textbook G = 4π² is exact only in *Gaussian* years (365.2569 d) and
+   would make every mean motion 1.9e-5 too fast against Horizons.       */
+#define GM_SUN      39.476926421373    /* AU³/yr²  (= 4π² × 0.9999622)   */
+#define G_AU        GM_SUN             /* G with M☉ = 1                  */
 #define C_AU_YR     63241.077               /* speed of light, AU/yr        */
 #define N_BODIES    9                       /* Sun + 8 planets              */
 #define TRAIL_LEN   21000                   /* trail history points         */
@@ -110,16 +116,18 @@ typedef struct {
 /* All orbital elements: JPL SSD Table 1, J2000.0 epoch.  Masses in M☉.
    ω = long.peri − long.node,  M0 = mean.lon − long.peri  (both mod 360°) */
 static const BodyDef BODIES[N_BODIES] = {
-/*  name         mass(M☉)      a(AU)        ecc         inc(°)     Ω(°)        ω(°)       M0(°)      R(km)      T(yr)   v(km/s) R    G    B   dr */
-  { "Sun",    1.0,          0.0,        0.0,        0.0,       0.0,        0.0,        0.0,   695700.0,    0.0,    0.0, 255,220, 50, 14.0 },
-  { "Mercury",1.6601e-7,    0.38709927, 0.20563593, 7.00498,  48.33077,   29.12703,  174.79,   2439.7,   0.2408,  47.4, 180,180,180,  3.0 },
-  { "Venus",  2.4478e-6,    0.72333566, 0.00677672, 3.39468,  76.67984,   54.92262,   50.38,   6051.8,   0.6152,  35.0, 230,180, 80,  5.0 },
-  { "Earth",  3.0034e-6,    1.00000261, 0.01671123, 0.00000,   0.0,       102.93768,  357.53,  6371.0,   1.0000,  29.8,  80,130,255,  5.0 },
-  { "Mars",   3.2271e-7,    1.52371034, 0.09339410, 1.84969,  49.55954,  286.49683,   19.39,   3389.5,   1.8809,  24.1, 200, 80, 50,  4.0 },
-  { "Jupiter",9.5458e-4,    5.20288700, 0.04838624, 1.30440, 100.47391,  274.25457,   19.65,  69911.0,  11.8618,  13.1, 220,160, 90, 11.0 },
-  { "Saturn", 2.8580e-4,    9.53667594, 0.05386179, 2.48599, 113.66242,  338.93646,  317.36,  58232.0,  29.4571,   9.7, 210,190,130, 10.0 },
-  { "Uranus", 4.3653e-5,   19.18916464, 0.04725744, 0.77264,  74.01693,   96.93735,  142.28,  25362.0,  84.0107,   6.8, 150,220,220,  7.0 },
-  { "Neptune",5.1514e-5,   30.06992276, 0.00859048, 1.77004, 131.78423,  273.18054,  259.92,  24622.0, 164.7945,   5.4,  80,100,255,  7.0 },
+/* Masses: DE441 GM ratios to the Sun — planetary *systems* (Earth = Earth–Moon
+   barycentre), matching the barycentric Horizons vectors the model starts from.
+    name         mass(M☉)       a(AU)        ecc         inc(°)     Ω(°)        ω(°)       M0(°)      R(km)      T(yr)   v(km/s) R    G    B   dr */
+  { "Sun",    1.0,           0.0,        0.0,        0.0,       0.0,        0.0,        0.0,   695700.0,    0.0,    0.0, 255,220, 50, 14.0 },
+  { "Mercury",1.66012083e-7, 0.38709927, 0.20563593, 7.00498,  48.33077,   29.12703,  174.79,   2439.7,   0.2408,  47.4, 180,180,180,  3.0 },
+  { "Venus",  2.44783828e-6, 0.72333566, 0.00677672, 3.39468,  76.67984,   54.92262,   50.38,   6051.8,   0.6152,  35.0, 230,180, 80,  5.0 },
+  { "Earth",  3.04043264e-6, 1.00000261, 0.01671123, 0.00000,   0.0,       102.93768,  357.53,  6371.0,   1.0000,  29.8,  80,130,255,  5.0 },
+  { "Mars",   3.22715608e-7, 1.52371034, 0.09339410, 1.84969,  49.55954,  286.49683,   19.39,   3389.5,   1.8809,  24.1, 200, 80, 50,  4.0 },
+  { "Jupiter",9.54791910e-4, 5.20288700, 0.04838624, 1.30440, 100.47391,  274.25457,   19.65,  69911.0,  11.8618,  13.1, 220,160, 90, 11.0 },
+  { "Saturn", 2.85885670e-4, 9.53667594, 0.05386179, 2.48599, 113.66242,  338.93646,  317.36,  58232.0,  29.4571,   9.7, 210,190,130, 10.0 },
+  { "Uranus", 4.36624961e-5,19.18916464, 0.04725744, 0.77264,  74.01693,   96.93735,  142.28,  25362.0,  84.0107,   6.8, 150,220,220,  7.0 },
+  { "Neptune",5.15138377e-5,30.06992276, 0.00859048, 1.77004, 131.78423,  273.18054,  259.92,  24622.0, 164.7945,   5.4,  80,100,255,  7.0 },
 };
 
 /* ── vector helpers ─────────────────────────────────────────────────────── */
@@ -1526,7 +1534,7 @@ static int run_tests(void){
             fclose(f);
             /* sort by JD, integrate once, landing exactly on each epoch */
             for(int a=0;a<nr;a++) for(int b=a+1;b<nr;b++) if(rows[b].jd < rows[a].jd){ HRow t=rows[a]; rows[a]=rows[b]; rows[b]=t; }
-            test_sim(&s, -1, 0);
+            test_sim(&s, -1, 1);          /* GR on: DE441 includes it        */
             double dt0 = s.dt; int all_ok = 1;
             for(int k=0;k<nr;k++){
                 double t_target = (rows[k].jd - JD_J2000)/365.25;
@@ -1539,9 +1547,12 @@ static int run_tests(void){
                 Vec3 r = v3sub(s.pos[rows[k].body], s.pos[0]);
                 double err = v3len(v3sub(r, (Vec3){rows[k].x, rows[k].y, rows[k].z}));
 #ifdef HAVE_HORIZONS_J2000
-                /* exact osculating start: remaining error is missing physics
-                   (asteroids, Moon as a separate body, GR when off)      */
-                double tol = 0.001*BODIES[rows[k].body].a;
+                /* Exact osculating start.  Achieved: ~1e-5 AU inner, ~1e-7 AU
+                   outer after 20 yr; what remains is DE441 physics we omit
+                   (asteroids, the Moon as a separate body, solar J2).  The
+                   tolerance grows with the span so later epochs still pass. */
+                double yrs = fabs(t_target); if(yrs < 20.0) yrs = 20.0;
+                double tol = 1e-4*BODIES[rows[k].body].a*(yrs/20.0);
                 int ok = err < tol; if(!ok) all_ok = 0;
                 snprintf(d, sizeof d, "%-8s JD %.1f: |Δr| = %.2e AU (%.0f km, tol %.1e)",
                          BODIES[rows[k].body].name, rows[k].jd, err, err*1.495978707e8, tol);

@@ -141,10 +141,12 @@ with
 This produces Mercury's extra 42.98\(dq/century.
 Planet\(enplanet 1PN terms are omitted.
 .SS Units
-Length in AU, mass in solar masses, time in years, so that
-.I G = 4π²
-and
+Length in AU, mass in solar masses, time in Julian years;
+.I GM☉ = k²·365.25² = 39.47693 AU³/yr²
+(the textbook 4π² holds only in Gaussian years and would put every mean
+motion 7.6×10\u\-5\d too fast), and
 .IR c\~=\~63241.077\~AU/yr .
+Planet masses are the DE441 system GM ratios.
 .SS Initial conditions
 Preferably exact JPL Horizons barycentric state vectors at J2000.0
 .RI ( horizons_j2000.h ,
@@ -182,7 +184,9 @@ N\-body problem;
 Mercury's numerical perihelion drift and its 1PN advance (42.98\(dq/century);
 and, if
 .I tests/horizons.csv
-exists, the planets' positions against JPL Horizons.
+exists, the planets' positions against JPL Horizons (with exact initial
+conditions the model agrees with DE441 to ~10\u3\d km for the inner planets
+and ~10\u2\d km for the outer ones after 20 years).
 .I tests/fetch_horizons.sh
 downloads that file for a chosen epoch.
 .SH ENVIRONMENT
