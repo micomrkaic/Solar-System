@@ -1,0 +1,15 @@
+# Build output
+solar_system
+web/
+solar_system_itchio.zip
+
+# Video captures
+*.mp4
+
+# Editor / OS
+.DS_Store
+*.swp
+*~
+
+# docs/ is deliberately NOT ignored: GitHub Pages serves it.
+# DejaVuSans.ttf is deliberately tracked: the WASM build embeds it.
